@@ -14,7 +14,7 @@ def get_ps_column_types(return_columns):
             return {column: ps_columns[column] for column in return_columns.split(",")}
 
 def get_planetary_systems_data(return_columns="pl_name,disc_pubdate,disc_year,discoverymethod,disc_locale,disc_facility,disc_instrument,disc_telescope,sy_snum,sy_pnum,sy_mnum,cb_flag,ptv_flag,tran_flag,rv_flag,ast_flag,obm_flag,micro_flag,etv_flag,ima_flag,pul_flag,soltype,pl_controv_flag,pl_rade,pl_bmasse,pl_bmassprov,pl_orbeccenstr,pl_eqt,st_spectype,st_teff,st_rad,st_mass,st_met,st_metratio,st_logg,sy_dist,rowupdate,releasedate"):
-    conn = sqlite3.connect("data/ps.db")
+    conn = sqlite3.connect("data/exoplanets.db")
 
     url = f"https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+{return_columns}+from+ps&format=json"
     response = requests.get(url)
