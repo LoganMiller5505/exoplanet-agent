@@ -107,32 +107,30 @@ def get_column_types(table_name, return_columns):
             return {column: ps_columns[column] for column in return_columns.split(",")}
 
 def get_exoplanet_data(table_name, return_columns):
-    conn = sqlite3.connect("data/exoplanets.db")
-
     url = f"https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+{return_columns}+from+{table_name}&format=json"
     response = requests.get(url)
 
-    if response.status_code == 200:
-        try:
-            json_data = response.json()
-        except json.JSONDecodeError as e:
-            print(f"Error: Failed to decode JSON when fetching data from {table_name}.\n{e}")
-            conn.close()
-            return
-        column_types = get_column_types(table_name, return_columns)
-        definitions = ", ".join(f"{column} {column_type}" for column, column_type in column_types.items())
+    if response.status_code != 200:
+        print(f"Error: Failed to fetch data. Status code: {response.status_code}")
+        return
+    
+    try:
+        json_data = response.json()
+    except json.JSONDecodeError as e:
+        print(f"Error: Failed to decode JSON when fetching data from {table_name}.\n{e}")
+        return
+    conn = sqlite3.connect("data/exoplanets.db")
+    column_types = get_column_types(table_name, return_columns)
+    definitions = ", ".join(f"{column} {column_type}" for column, column_type in column_types.items())
+    with conn:
         conn.execute(f"DROP TABLE IF EXISTS {table_name}")
         conn.execute(f"CREATE TABLE {table_name} ({definitions})")
         placeholders = ", ".join("?" for column in column_types)
-        for item in json_data:
-            conn.execute(f"INSERT INTO {table_name} ({', '.join(column_types)}) VALUES ({placeholders})", tuple(item[column] for column in column_types))
-        conn.commit()
-        print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
-        conn.close()
-    else:
-        print(f"Error: Failed to fetch data. Status code: {response.status_code}")
-        conn.close()
-
+        conn.executemany(f"INSERT INTO {table_name} ({', '.join(column_types)}) VALUES ({placeholders})", [tuple(item[column] for column in column_types) for item in json_data])
+    conn.commit()
+    conn.close()
+    print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
+        
 def main():
     get_exoplanet_data("ps", ps_return_columns)
     get_exoplanet_data("toi", toi_return_columns)
