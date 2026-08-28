@@ -58,7 +58,8 @@ k2pandc_return_columns = """
     default_flag,disposition,disp_refname,k2_campaigns,k2_campaigns_num,
     discoverymethod,disc_year,ra,dec,
     pl_orbper,pl_rade,pl_bmasse,pl_eqt,pl_insol,
-    st_teff,st_rad,st_mass,sy_dist
+    st_teff,st_rad,st_mass,sy_dist,
+    pl_trandur,pl_trandep
 """.replace("\n", "").replace(" ", "")
 
 spectra_return_columns = """
