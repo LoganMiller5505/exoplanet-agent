@@ -11,6 +11,18 @@ with open("transforms/views/habitable.sql", "r") as f:
     sql = f.read()
 cursor.executescript(sql)
 
+with open("transforms/views/planets.sql", "r") as f:
+    sql = f.read()
+cursor.executescript(sql)
+
+with open("transforms/views/planet_names.sql", "r") as f:
+    sql = f.read()
+cursor.executescript(sql)
+
+with open("transforms/views/candidates.sql", "r") as f:
+    sql = f.read()
+cursor.executescript(sql)
+
 conn.commit()
 conn.close()
 
