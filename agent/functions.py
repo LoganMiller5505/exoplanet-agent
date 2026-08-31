@@ -1,30 +1,49 @@
 import sqlite3
+import re
 
-def get_habitable_planets(size_class=None):
-    conn = sqlite3.connect('data/exoplanets.db')
-    cursor = conn.cursor()
+# Shared functions (not directly called by tools)
+def resolve_object(name):
+    norm_name = re.sub(r'[^a-zA-Z0-9]', '', name)
+    # TODO: Implement a function to resolve an object name to a canonical form
+    query = f"SELECT * FROM planets WHERE pl_name LIKE {norm_name}"
+    return query(query)
 
-    query = "SELECT * FROM habitable"
-    params = []
 
-    if size_class:
-        if size_class == 'small':
-            query += " WHERE pl_rade BETWEEN 0 AND 1.5"
-        elif size_class == 'medium':
-            query += " WHERE pl_rade BETWEEN 1.5 AND 2.5"
-        elif size_class == 'large':
-            query += " WHERE pl_rade BETWEEN 2.5 AND 10"
-        else:
-            raise ValueError("Invalid size class. Choose from 'small', 'medium', or 'large'.")
+# Single-return functions (called by tools)
+def get_planet(name):
+    name = resolve_object(name)
+    # TODO: Finish implementation
+    return None
 
-    query += " LIMIT 20"
+def get_system(hostname):
+    name = resolve_object(hostname)
+    # TODO: Finish implementation
+    return None
 
-    cursor.execute(query, params)
-    results = cursor.fetchall()
 
-    conn.close()
-    return results
+# General-purpose search function (called by tools)
+def search_planets(**filters):
+    # TODO: Implement a function to search for planets based on various filters (e.g., size, temperature, habitability)
+    return None
 
+
+# Aggregate function (called by tools)
+def count_planets(group_by, filters):
+    # TODO: Implement a function to count planets based on groupings and filters
+    return None
+
+
+# "Meta" function (called by tools, if necessary)
+def describe_schema(view=None):
+    # TODO: Implement a function to describe the schema of the database
+    return None
+
+
+# Dictionary defining which functions are available to the tool
 TOOL_FUNCTIONS = {
-    "get_habitable_planets": get_habitable_planets,
+    "get_planet": get_planet,
+    "get_system": get_system,
+    "search_planets": search_planets,
+    "count_planets": count_planets,
+    "describe_schema": describe_schema,
 }
