@@ -3,12 +3,16 @@ import os
 import requests
 import xml.etree.ElementTree as ET
 import json
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 import psycopg
 from dotenv import load_dotenv
 
 load_dotenv()
 conn_string = os.getenv("DATABASE_URL")
+
+ARCHIVE_TIMEOUT = (10, 180)
 
 TABLES_XML_PATH = "ingest/tables.xml"
 XML_TYPE_MATCH = {"char": "TEXT", "double": "DOUBLE PRECISION", "int": "BIGINT"}
@@ -116,7 +120,16 @@ def get_column_types(table_name, return_columns):
 
 def get_exoplanet_data(table_name, return_columns):
     url = f"https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+{return_columns}+from+{table_name}&format=json"
-    response = requests.get(url)
+
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )))
+
+    response = session.get(url, timeout=ARCHIVE_TIMEOUT)
     response.raise_for_status()
 
     try:
