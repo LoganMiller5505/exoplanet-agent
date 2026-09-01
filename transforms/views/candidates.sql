@@ -25,7 +25,7 @@ SELECT
     toi.st_teff             AS stellar_temperature
 FROM toi
 LEFT JOIN ps_default as psd
-    ON toi.tid = psd.tic_id
+    ON psd.tid_ic = 'TIC ' || toi.tid
     AND ABS(toi.pl_orbper - psd.pl_orbper) < 0.01 --Match on an individual planet level so stars with multiple planets don't get expanded
 
 UNION ALL

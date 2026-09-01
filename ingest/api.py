@@ -3,7 +3,7 @@ import sqlite3
 import xml.etree.ElementTree as ET
 import json
 
-TABLES_XML_PATH = "data/tables.xml"
+TABLES_XML_PATH = "ingest/tables.xml"
 XML_TYPE_MATCH = {"char": "TEXT", "double": "REAL", "int": "INTEGER"}
 
 ps_return_columns = """
