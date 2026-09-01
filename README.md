@@ -2,14 +2,16 @@
 ExoQuery is an AI agent designed to interface with NASA's Exoplanet Archive data to quickly answer any questions surrounding this complex dataset.
 
 ## Live Demo
-In the future, you will be able to interact with the ExoQuery chatbot on [exoquery.lmiller.io](exoquery.lmiller.io) hosted by Streamlit, but since this is a working project, this is not yet implemented! Come back later to see this in action!
+You can currently talk with the ExoQuery chatbot on [exoquery.lmiller.io](exoquery.lmiller.io). Be patient, as it is using a free model which is subject to rate limiting. Feel free to test its knowledge and discover the kinds of data it can access!
 
 ## Components
 ### 1. API Data Fetch
-Uses Python requests to query a JSON string which gets stored into a Neon Postgres database. This is orchestrated using GitHub actions.
-### 2. Additional Tables
-Build on top of the mostly-raw data to create additional, more structured tables. This also means that the agent never needs to interact directly with the API to get data. This is a part of the API data fetch GitHub action.
-### 3. Agent with Tooling
-Utilizes the Groq API free-tier and predefined tools which interface with the tables to answer user questions regarding exoplanets.
-### 4. Streamlit App (WIP)
-A helpful chat interface is provided for users to easily ask questions.
+`ingest/api.py` uses Python requests to pull 11 tables from the archive's TAP service and store them in a Neon Postgres database.
+### 2. Views
+`transforms/views/` builds structured views on top of the mostly-raw data — planets, systems, name aliases, size and orbit classes, habitable zone boundaries, and unconfirmed candidates. This also means the agent never needs to interact directly with the API to get data.
+### 3. Orchestration
+GitHub Actions re-runs the ingest daily and re-applies the views whenever their SQL changes.
+### 4. Agent with Tooling
+Utilizes the Groq API free-tier and four predefined tools which interface with the views to answer user questions regarding exoplanets. The model never writes SQL itself.
+### 5. Streamlit App
+A helpful chat interface is provided for users to easily ask questions. Run it with `streamlit run agent/app.py`, with `DATABASE_URL` and `GROQ_API_KEY` set in a `.env` file locally, or go to [exoquery.lmiller.io](exoquery.lmiller.io)!
