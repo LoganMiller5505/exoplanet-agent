@@ -17,7 +17,11 @@ SELECT
     toi.pl_eqt              AS equilibrium_temperature,
     toi.pl_insol            AS insolation,
     toi.pl_trandurh         AS duration,
+<<<<<<< HEAD
     (toi.pl_trandep*100000) AS depth,
+=======
+    toi.pl_trandep          AS depth,
+>>>>>>> origin/main
     toi.st_teff             AS stellar_temperature
 FROM toi
 LEFT JOIN ps_default as psd
@@ -63,7 +67,7 @@ SELECT
     pl_rade                             AS radius,
     pl_eqt                              AS equilibrium_temperature,
     pl_insol                            AS insolation,
-    pl_trandur                          AS duration,
-    pl_trandep                          AS depth,
+    pl_trandur                          AS duration, --Archive metadata labels this 'day', but the values are hours: 355 rows would otherwise transit for longer than their whole orbit
+    (pl_trandep*10000)                  AS depth, --Source is percent; 1% = 10,000 ppm
     st_teff                             AS stellar_temperature
 FROM k2pandc_default;
