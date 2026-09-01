@@ -23,14 +23,21 @@ def connect():
 
 def query(sql, limit=50):
     global conn
-    if conn is None:
-        conn = connect()
-        print("Initial connection to the database successful.")
 
-    with conn.cursor() as cur:
+    for attempt in (1, 2):
         try:
-            cur.execute(sql)
-            rows = cur.fetchmany(limit+1)
+            if conn is None or conn.closed:
+                conn = connect()
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchmany(limit+1)
+            break
+        except psycopg.OperationalError as e:
+            # Neon suspends idle compute after ~5 min, so the first query after a lull
+            # finds a dead socket. Drop it and let the next pass reconnect.
+            conn = None
+            if attempt == 2:
+                raise QueryError(f"Database query error: {e}") from e
         except psycopg.Error as e:
             raise QueryError(f"Database query error: {e}") from e
 
