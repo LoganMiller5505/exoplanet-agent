@@ -1,12 +1,53 @@
-import sqlite3
 import re
+from db import query
 
 # Shared functions (not directly called by tools)
 def resolve_object(name):
-    norm_name = re.sub(r'[^a-zA-Z0-9]', '', name)
-    # TODO: Implement a function to resolve an object name to a canonical form
-    query = f"SELECT * FROM planets WHERE pl_name LIKE {norm_name}"
-    return query(query)
+    norm_name = re.sub(r'[^a-zA-Z0-9]', '', name).lower()
+    query_str = f"""
+        SELECT
+            resolves_to,
+            pl_name,
+            hostname,
+            GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
+            MIN(alias) AS matched_alias
+        FROM planet_names
+        WHERE alias_norm LIKE '{norm_name}'
+        GROUP BY resolves_to, pl_name, hostname
+    """
+    result = query(query_str)
+    rows = result["rows"]
+
+    if not rows:
+        query_str = f"""
+            SELECT
+                resolves_to,
+                pl_name,
+                hostname,
+                GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
+                MIN(alias) AS matched_alias
+            FROM planet_names
+            WHERE alias_norm LIKE '{norm_name}%'
+            GROUP BY resolves_to, pl_name, hostname
+        """
+        result = query(query_str, limit=8)
+        rows = result["rows"]
+
+        status = "suggestions" if rows else "not_found"
+        resolves_to = None
+        pl_name = None
+        hostname = None
+        candidates = rows if rows else []
+        matched_via = None
+    else:
+        status = "resolved" if len(rows) == 1 else "ambiguous"
+        resolves_to = rows[0]["resolves_to"]
+        pl_name = rows[0]["pl_name"]
+        hostname = rows[0]["hostname"]
+        candidates = rows
+        matched_via = rows[0]["matched_via"]
+
+    return {"status": status, "resolves_to": resolves_to, "pl_name": pl_name, "hostname": hostname, "candidates": candidates, "matched_via": matched_via}
 
 
 # Single-return functions (called by tools)
