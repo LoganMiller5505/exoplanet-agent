@@ -117,16 +117,12 @@ def get_column_types(table_name, return_columns):
 def get_exoplanet_data(table_name, return_columns):
     url = f"https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select+{return_columns}+from+{table_name}&format=json"
     response = requests.get(url)
+    response.raise_for_status()
 
-    if response.status_code != 200:
-        print(f"Error: Failed to fetch data. Status code: {response.status_code}")
-        return
-    
     try:
         json_data = response.json()
     except json.JSONDecodeError as e:
-        print(f"Error: Failed to decode JSON when fetching data from {table_name}.\n{e}")
-        return
+        raise RuntimeError(f"{table_name}: archive returned invalid JSON") from e
 
     column_types = get_column_types(table_name, return_columns)
     definitions = ", ".join(f"{column} {column_type}" for column, column_type in column_types.items())
@@ -135,22 +131,19 @@ def get_exoplanet_data(table_name, return_columns):
     # raw tables are prefixed src_ to separate them from the stg_ views built on top.
     dest_table = f"src_{table_name}"
 
-    try:
-        with psycopg.connect(conn_string) as conn:
-            print("Connection established.")
+    # No try/except here: psycopg errors propagate so the process exits non-zero.
+    with psycopg.connect(conn_string) as conn:
+        print("Connection established.")
 
-            with conn.cursor() as cur:
-                cur.execute(f"DROP TABLE IF EXISTS {dest_table}")
-                cur.execute(f"CREATE TABLE IF NOT EXISTS {dest_table} ({definitions})")
-                placeholders = ", ".join("%s" for _ in column_types)
-                insert_query = f"INSERT INTO {dest_table} ({', '.join(column_types)}) VALUES ({placeholders})"
-                data_to_insert = [tuple(item[column] for column in column_types) for item in json_data]
-                cur.executemany(insert_query, data_to_insert)
-            print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
-
-    except Exception as e:
-        print("Connection failed.")
-        print(e)
+        with conn.cursor() as cur:
+            # TRUNCATE, not DROP since views rely on these tables existing
+            cur.execute(f"CREATE TABLE IF NOT EXISTS {dest_table} ({definitions})")
+            cur.execute(f"TRUNCATE {dest_table}")
+            placeholders = ", ".join("%s" for _ in column_types)
+            insert_query = f"INSERT INTO {dest_table} ({', '.join(column_types)}) VALUES ({placeholders})"
+            data_to_insert = [tuple(item[column] for column in column_types) for item in json_data]
+            cur.executemany(insert_query, data_to_insert)
+        print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
 
 def main():
     get_exoplanet_data("ps", ps_return_columns)
