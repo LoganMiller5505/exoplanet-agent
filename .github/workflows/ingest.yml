@@ -1,6 +1,12 @@
 name: Ingest
 
 on:
+  push:
+    branches: [ main, orchestration ]
+    paths:
+      - "ingest/api.py"
+      - "ingest/columns.py"
+      - ".github/workflows/ingest.yml"
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
