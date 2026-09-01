@@ -39,11 +39,13 @@ exist to correct interpretations that would otherwise be wrong. Use exact planet
 star names as the archive spells them, and state counts as the numbers the tools return."""
 
 
-def ask(question, max_turns=6):
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": question},
-    ]
+def ask(question, history=None, max_turns=6):
+    # history is prior user/assistant text only -- the caller does not pass back the
+    # tool_calls and tool results from earlier turns
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": question})
 
     for _ in range(max_turns):
         response = client.chat.completions.create(
