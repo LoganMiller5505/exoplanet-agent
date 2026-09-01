@@ -10,17 +10,15 @@ def connect():
     conn.row_factory = sqlite3.Row
     return conn
 
-def query(sql, params=(), limit=50):
+def query(sql, limit=50):
     conn = connect()
     try:
         cursor = conn.cursor()
-        cursor.execute(sql, params)
+        cursor.execute(sql)
         rows = [dict(row) for row in cursor.fetchmany(limit+1)]
     except sqlite3.Error as e:
         raise QueryError(f"Database query error: {e}") from e
     finally:
         conn.close()
 
-    notes = []
-
-    return {"rows": rows[:limit], "row_count": len(rows[:limit]), "truncated": len(rows) > limit, "notes": notes}
+    return {"rows": rows[:limit], "row_count": len(rows[:limit]), "truncated": len(rows) > limit}
