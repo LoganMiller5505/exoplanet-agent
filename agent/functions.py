@@ -53,11 +53,44 @@ def _sql_escape(value):
     # Double any single quote so names like "Barnard's star" work
     return value.replace("'", "''")
 
+class FilterError(ValueError):
+    pass
+
+def _number(value, label):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise FilterError(f"Invalid {label}: '{value}'. Must be a number.")
+
+def _enum(value, label, allowed):
+    if value not in allowed:
+        raise FilterError(f"Invalid {label}: '{value}'. Must be one of: {', '.join(allowed)}")
+    return value
+
 
 _RESOLVE_NOTES = {
     "ambiguous": "'{name}' matches more than one object; ask which was meant before answering.",
     "suggestions": "No exact match for '{name}'. The candidates below merely start with it -- confirm one before using it.",
     "not_found": "No object named '{name}' in the archive.",
+}
+
+_SIZE_CLASSES = ("terrestrial", "super_earth", "mini_neptune", "neptune_like", "gas_giant")
+_ORBITAL_CLASSES = ("ultra_short_period", "hot_jupiter", "warm_giant", "cold_giant",
+                    "hot_small", "other")
+_SPECTRAL_CLASSES = ("O", "B", "A", "F", "G", "K", "M", "L/T/Y")
+_DISCOVERY_METHODS = ("Transit", "Radial Velocity", "Microlensing", "Imaging", "Astrometry",
+                      "Eclipse Timing Variations", "Transit Timing Variations",
+                      "Pulsar Timing", "Pulsation Timing Variations",
+                      "Orbital Brightness Modulation", "Disk Kinematics")
+
+# sort_by never reaches the query text -- it selects a column, it isn't one.
+_SORT_COLUMNS = {
+    "distance_pc": "p.sy_dist",
+    "radius_earth": "p.pl_rade",
+    "mass_earth": "p.pl_bmasse",
+    "orbital_period_days": "p.pl_orbper",
+    "discovery_year": "p.disc_year",
+    "hz_position": "hz.hz_position",
 }
 
 # Single-return functions (called by tools)
@@ -270,10 +303,95 @@ def search_planets(
         exclude_controversial=True,
         sort_by="distance_pc", limit=20
 ):
-    FILTERS = {
+    where = []
+    try:
+        if radius_min is not None:
+            where.append(f"p.pl_rade >= {_number(radius_min, 'radius_min')}")
+        if radius_max is not None:
+            where.append(f"p.pl_rade <= {_number(radius_max, 'radius_max')}")
+        if mass_min is not None:
+            where.append(f"p.pl_bmasse >= {_number(mass_min, 'mass_min')}")
+        if mass_max is not None:
+            where.append(f"p.pl_bmasse <= {_number(mass_max, 'mass_max')}")
+        if period_min is not None:
+            where.append(f"p.pl_orbper >= {_number(period_min, 'period_min')}")
+        if period_max is not None:
+            where.append(f"p.pl_orbper <= {_number(period_max, 'period_max')}")
+        if distance_max_pc is not None:
+            where.append(f"p.sy_dist <= {_number(distance_max_pc, 'distance_max_pc')}")
+        if size_class is not None:
+            where.append(f"pc.size_class = '{_enum(size_class, 'size_class', _SIZE_CLASSES)}'")
+        if orbital_class is not None:
+            where.append(f"pc.orbital_class = '{_enum(orbital_class, 'orbital_class', _ORBITAL_CLASSES)}'")
+        if spectral_class is not None:
+            where.append(f"pc.spectral_class = '{_enum(spectral_class, 'spectral_class', _SPECTRAL_CLASSES)}'")
+        if discovery_method is not None:
+            where.append(f"p.discoverymethod = '{_enum(discovery_method, 'discovery_method', _DISCOVERY_METHODS)}'")
+        if disc_year_min is not None:
+            where.append(f"p.disc_year >= {_number(disc_year_min, 'disc_year_min')}")
+        if disc_year_max is not None:
+            where.append(f"p.disc_year <= {_number(disc_year_max, 'disc_year_max')}")
+        if in_habitable_zone is True:
+            where.append("hz.in_hz_conservative = 1")
+        elif in_habitable_zone is False:
+            where.append("hz.in_hz_conservative = 0")
+        if rocky_only:
+            where.append("hz.is_rocky_candidate = 1")
+        if exclude_controversial:
+            where.append("p.pl_controv_flag != 1")
+        if sort_by not in _SORT_COLUMNS:
+            raise FilterError(f"Invalid sort_by: '{sort_by}'. Must be one of: {', '.join(_SORT_COLUMNS.keys())}")
+        limit = int(_number(limit, 'limit'))
+    except FilterError as e:
+        return {"status": "filter_error", "error": str(e), "notes": []}
 
+    query_str = f"""
+        SELECT
+            p.pl_name               AS pl_name,
+            p.hostname              AS hostname,
+            p.pl_rade               AS radius_earth,
+            p.pl_bmasse             AS mass_earth,
+            p.pl_orbper             AS orbital_period_days,
+            p.sy_dist               AS distance_pc,
+            p.disc_year             AS discovery_year,
+            pc.size_class           AS size_class,
+            pc.orbital_class        AS orbital_class,
+            pc.spectral_class       AS spectral_class,
+            hz.in_hz_conservative   AS in_hz_conservative
+        FROM planets p
+        LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
+        LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
+        WHERE {" AND ".join(where) if where else "1 = 1"}
+        ORDER BY {_SORT_COLUMNS[sort_by]} NULLS LAST
+        LIMIT {limit + 1}
+    """
+    result = query(query_str, limit=limit)
+    notes = []
+
+    if in_habitable_zone is True:
+        notes.append(
+            "Filtering by habitable zone membership is based on the conservative "
+            "model. The optimistic model is not used here."
+        )
+    elif in_habitable_zone is False:
+        notes.append(
+            "Only planets that were evaluated and found outside the conservative "
+            "habitable zone are included. Planets whose habitable zone could not be "
+            "computed (host star outside the model's range, or missing luminosity or "
+            "orbit) are excluded rather than counted as non-habitable."
+        )
+    if result["truncated"]:
+        notes.append(
+            f"Results truncated to {limit} rows. Refine your filters to see more."
+        )
+
+    return {
+        "status": "ok",
+        "rows": result["rows"],
+        "row_count": result["row_count"],
+        "truncated": result["truncated"],
+        "notes": notes,
     }
-    return None
 
 
 # Aggregate function (called by tools)
