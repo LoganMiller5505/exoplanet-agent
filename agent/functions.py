@@ -1,30 +1,534 @@
-import sqlite3
+import re
+from db import query
 
-def get_habitable_planets(size_class=None):
-    conn = sqlite3.connect('data/exoplanets.db')
-    cursor = conn.cursor()
+# Shared functions (not directly called by tools)
+def resolve_object(name):
+    norm_name = re.sub(r'[^a-zA-Z0-9]', '', name).lower()
+    query_str = f"""
+        SELECT
+            resolves_to,
+            pl_name,
+            hostname,
+            GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
+            MIN(alias) AS matched_alias
+        FROM planet_names
+        WHERE alias_norm = '{norm_name}'
+        GROUP BY resolves_to, pl_name, hostname
+    """
+    result = query(query_str)
+    rows = result["rows"]
 
-    query = "SELECT * FROM habitable"
-    params = []
+    if not rows:
+        query_str = f"""
+            SELECT
+                resolves_to,
+                pl_name,
+                hostname,
+                GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
+                MIN(alias) AS matched_alias
+            FROM planet_names
+            WHERE alias_norm LIKE '{norm_name}%'
+            GROUP BY resolves_to, pl_name, hostname
+        """
+        result = query(query_str, limit=8)
+        rows = result["rows"]
 
-    if size_class:
-        if size_class == 'small':
-            query += " WHERE pl_rade BETWEEN 0 AND 1.5"
-        elif size_class == 'medium':
-            query += " WHERE pl_rade BETWEEN 1.5 AND 2.5"
-        elif size_class == 'large':
-            query += " WHERE pl_rade BETWEEN 2.5 AND 10"
+        status = "suggestions" if rows else "not_found"
+        resolves_to = None
+        pl_name = None
+        hostname = None
+        candidates = rows if rows else []
+        matched_via = None
+    else:
+        status = "resolved" if len(rows) == 1 else "ambiguous"
+        candidates = rows
+        # Only a single match names an object. Filling these from rows[0] when several
+        # matched would silently pick one -- "55 Cnc b" the planet over "55 Cnc B" the star.
+        if status == "resolved":
+            resolves_to = rows[0]["resolves_to"]
+            pl_name = rows[0]["pl_name"]
+            hostname = rows[0]["hostname"]
+            matched_via = rows[0]["matched_via"]
         else:
-            raise ValueError("Invalid size class. Choose from 'small', 'medium', or 'large'.")
+            resolves_to = None
+            pl_name = None
+            hostname = None
+            matched_via = None
 
-    query += " LIMIT 20"
+    return {"status": status, "resolves_to": resolves_to, "pl_name": pl_name, "hostname": hostname, "candidates": candidates, "matched_via": matched_via}
 
-    cursor.execute(query, params)
-    results = cursor.fetchall()
+def _sql_escape(value):
+    # Double any single quote so names like "Barnard's star" work
+    return value.replace("'", "''")
 
-    conn.close()
-    return results
+class FilterError(ValueError):
+    pass
 
+def _number(value, label):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise FilterError(f"Invalid {label}: '{value}'. Must be a number.")
+
+def _enum(value, label, allowed):
+    if value not in allowed:
+        raise FilterError(f"Invalid {label}: '{value}'. Must be one of: {', '.join(allowed)}")
+    return value
+
+
+_RESOLVE_NOTES = {
+    "ambiguous": "'{name}' matches more than one object; ask which was meant before answering.",
+    "suggestions": "No exact match for '{name}'. The candidates below merely start with it -- confirm one before using it.",
+    "not_found": "No object named '{name}' in the archive.",
+}
+
+_SIZE_CLASSES = ("terrestrial", "super_earth", "mini_neptune", "neptune_like", "gas_giant")
+_ORBITAL_CLASSES = ("ultra_short_period", "hot_jupiter", "warm_giant", "cold_giant",
+                    "hot_small", "other")
+_SPECTRAL_CLASSES = ("O", "B", "A", "F", "G", "K", "M", "L/T/Y")
+_DISCOVERY_METHODS = ("Transit", "Radial Velocity", "Microlensing", "Imaging", "Astrometry",
+                      "Eclipse Timing Variations", "Transit Timing Variations",
+                      "Pulsar Timing", "Pulsation Timing Variations",
+                      "Orbital Brightness Modulation", "Disk Kinematics")
+
+# sort_by never reaches the query text -- it selects a column, it isn't one.
+_SORT_COLUMNS = {
+    "distance_pc": "p.sy_dist",
+    "radius_earth": "p.pl_rade",
+    "mass_earth": "p.pl_bmasse",
+    "orbital_period_days": "p.pl_orbper",
+    "discovery_year": "p.disc_year",
+    "hz_position": "hz.hz_position",
+}
+
+# group_by never reaches the query text -- it selects a column, it isn't one.
+# Discrete columns only. hz_position is a continuous float (5270 distinct values),
+# so grouping on it yields thousands of groups of one; it stays sort-only.
+_GROUP_COLUMNS = {
+    "size_class": "pc.size_class",
+    "mass_class": "pc.mass_class",
+    "orbital_class": "pc.orbital_class",
+    "spectral_class": "pc.spectral_class",
+    "discovery_method": "p.discoverymethod",
+    "discovery_year": "p.disc_year",
+    "in_habitable_zone": "hz.in_hz_conservative",
+    "hostname": "p.hostname",
+}
+
+# Single-return functions (called by tools)
+def get_planet(name):
+    resolved = resolve_object(name)
+
+    # Hand off to get_system if the name resolves to a star
+    if resolved["status"] == "resolved" and resolved["resolves_to"] == "star":
+        return {
+            "status": "is_star",
+            "hostname": resolved["hostname"],
+            "system": get_system(resolved["hostname"]),
+            "notes": [f"'{name}' names a star, not a planet. Returning its system instead."],
+        }
+
+    # Any ambiguity needs to be brought to the user first
+    if resolved["status"] != "resolved":
+        return {
+            "status": resolved["status"],
+            "candidates": resolved["candidates"],
+            "notes": [_RESOLVE_NOTES[resolved["status"]].format(name=name)],
+        }
+
+    query_str = f"""
+        SELECT
+            p.pl_name               AS pl_name,
+            p.hostname              AS hostname,
+            p.pl_letter             AS pl_letter,
+            p.pl_rade               AS radius_earth,
+            p.pl_bmasse             AS mass_earth,
+            p.pl_orbper             AS orbital_period_days,
+            p.pl_orbeccen           AS eccentricity,
+            p.pl_eqt                AS equilibrium_temp_k,
+            p.pl_insol              AS insolation_earth,
+            p.sy_dist               AS distance_pc,
+            p.discoverymethod       AS discovery_method,
+            p.disc_year             AS discovery_year,
+            p.disc_facility         AS discovery_facility,
+            p.st_spectype           AS star_spectral_type,
+            p.st_teff               AS star_temp_k,
+            p.st_rad                AS star_radius_solar,
+            p.st_mass               AS star_mass_solar,
+            p.pl_tsm                AS tsm,
+            p.pl_esm                AS esm,
+            pc.size_class           AS size_class,
+            pc.mass_class           AS mass_class,
+            pc.orbital_class        AS orbital_class,
+            pc.spectral_class       AS spectral_class,
+            pc.is_giant             AS is_giant,
+            pc.in_radius_valley     AS in_radius_valley,
+            hz.orbsmax_au           AS semi_major_axis_au,
+            hz.in_hz_conservative   AS in_hz_conservative,
+            hz.in_hz_optimistic     AS in_hz_optimistic,
+            hz.hz_position          AS hz_position,
+            hz.is_rocky_candidate   AS is_rocky_candidate,
+            -- Provenance and caveat flags, consumed by _planet_notes.
+            p.pl_controv_flag       AS controversial,
+            pc.mass_is_lower_bound  AS mass_is_lower_bound,
+            hz.teff_in_valid_range  AS teff_in_valid_range,
+            hz.lum_source           AS lum_source,
+            hz.orbsmax_source       AS orbsmax_source
+        FROM planets p
+        LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
+        LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
+        WHERE p.pl_name = '{_sql_escape(resolved["pl_name"])}'
+    """
+
+    # The name resolves to a planet, so query the planets view for its row
+    rows = query(query_str)["rows"]
+    if not rows:
+        return {
+            "status": "not_found",
+            "candidates": [],
+            "notes": [
+                f"'{resolved['pl_name']}' is a known alias but has no row in the "
+                "planetary systems catalog."
+            ],
+        }
+    row = rows[0]
+
+    # Attach necessary notes about return info, if any apply
+    notes = []
+    if row["controversial"] == 1:
+        notes.append("This planet's existence is disputed in the literature.")
+    if row["mass_is_lower_bound"] == 1:
+        notes.append("Mass is a lower bound (M*sin i) from radial velocity, not a true mass.")
+    if row["orbsmax_source"] == "derived":
+        notes.append("Semi-major axis was derived from Kepler's third law, not measured.")
+    if row["lum_source"] == "derived":
+        notes.append("Stellar luminosity was derived from radius and temperature, not measured.")
+    if row["teff_in_valid_range"] == 0:
+        notes.append(
+            "Host star temperature is outside the 2600-7200 K range of the habitable "
+            "zone model, so habitable zone membership was NOT evaluated. Absent "
+            "habitable zone fields mean 'unknown', not 'no'."
+        )
+    elif row["teff_in_valid_range"] is None:
+        notes.append(
+            "Habitable zone could not be computed (missing stellar luminosity or "
+            "orbital distance). Absent habitable zone fields mean 'unknown', not 'no'."
+        )
+
+    # Do not directly return null values (handle separately)
+    planet = {key: value for key, value in row.items() if value is not None}
+    unavailable = [key for key, value in row.items() if value is None]
+
+    return {
+        "status": "resolved",
+        "pl_name": row["pl_name"],
+        "hostname": row["hostname"],
+        "planet": planet,
+        "fields_unavailable": unavailable,
+        "notes": notes,
+    }
+
+def get_system(hostname):
+    resolved = resolve_object(hostname)
+
+    # Any ambiguity needs to be brought to the user first
+    if resolved["status"] != "resolved":
+        return {
+            "status": resolved["status"],
+            "candidates": resolved["candidates"],
+            "notes": [_RESOLVE_NOTES[resolved["status"]].format(name=hostname)],
+        }
+
+    query_str = f"""
+        SELECT *
+        FROM systems
+        WHERE hostname = '{_sql_escape(resolved["hostname"])}'
+    """
+    rows = query(query_str)["rows"]
+    if not rows:
+        return {
+            "status": "not_found",
+            "candidates": [],
+            "notes": [
+                f"'{resolved['hostname']}' is a known alias but has no row in the "
+                "systems view."
+            ],
+        }
+    row = rows[0]
+
+    query_str = f"""
+        SELECT
+            p.pl_name,
+            p.pl_letter,
+            pc.size_class,
+            pc.orbital_class,
+            hz.orbsmax_au,
+            hz.in_hz_conservative,
+            hz.hz_position
+        FROM planets p
+        LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
+        LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
+        WHERE p.hostname = '{_sql_escape(resolved["hostname"])}'
+        ORDER BY hz.orbsmax_au NULLS LAST, p.pl_orbper
+    """
+    planets = query(query_str)["rows"]
+
+    # Attach necessary notes about return info, if any apply
+    notes = []
+    if row["pnum_disagrees"] == 1:
+        notes.append(
+            f"The catalog lists {row['sy_pnum']} planets for this system but only "
+            f"{row['num_planets']} have rows here."
+        )
+    if row["is_multi_star"] == 1:
+        notes.append(
+            f"Multi-star system ({row['sy_snum']} stars). Habitable zone boundaries "
+            "assume a single host star, so they are less reliable here."
+        )
+    unevaluated = sum(1 for planet in planets if planet["in_hz_conservative"] is None)
+    if unevaluated:
+        notes.append(
+            f"Habitable zone was NOT evaluated for {unevaluated} of {len(planets)} "
+            "planets (host star outside the model's range, or missing luminosity or "
+            "orbit). The system's n_in_hz_conservative and has_habitable_planet "
+            "columns count only confirmed matches, so 0 means 'none confirmed', "
+            "not 'none habitable'."
+        )
+
+    # Do not directly return null values (handle separately)
+    system = {key: value for key, value in row.items() if value is not None}
+    unavailable = [key for key, value in row.items() if value is None]
+
+    return {
+        "status": "resolved",
+        "hostname": row["hostname"],
+        "system": system,
+        "planets": planets,
+        "fields_unavailable": unavailable,
+        "notes": notes,
+    }
+
+
+# Shared filter builder -- raises FilterError; callers own the try/except.
+def _build_where(
+        radius_min=None, radius_max=None,
+        mass_min=None, mass_max=None,
+        period_min=None, period_max=None,
+        distance_max_pc=None,
+        size_class=None,
+        orbital_class=None,
+        spectral_class=None,
+        discovery_method=None,
+        disc_year_min=None, disc_year_max=None,
+        in_habitable_zone=None,
+        rocky_only=False,
+        exclude_controversial=True,
+):
+    where = []
+    if radius_min is not None:
+        where.append(f"p.pl_rade >= {_number(radius_min, 'radius_min')}")
+    if radius_max is not None:
+        where.append(f"p.pl_rade <= {_number(radius_max, 'radius_max')}")
+    if mass_min is not None:
+        where.append(f"p.pl_bmasse >= {_number(mass_min, 'mass_min')}")
+    if mass_max is not None:
+        where.append(f"p.pl_bmasse <= {_number(mass_max, 'mass_max')}")
+    if period_min is not None:
+        where.append(f"p.pl_orbper >= {_number(period_min, 'period_min')}")
+    if period_max is not None:
+        where.append(f"p.pl_orbper <= {_number(period_max, 'period_max')}")
+    if distance_max_pc is not None:
+        where.append(f"p.sy_dist <= {_number(distance_max_pc, 'distance_max_pc')}")
+    if size_class is not None:
+        where.append(f"pc.size_class = '{_enum(size_class, 'size_class', _SIZE_CLASSES)}'")
+    if orbital_class is not None:
+        where.append(f"pc.orbital_class = '{_enum(orbital_class, 'orbital_class', _ORBITAL_CLASSES)}'")
+    if spectral_class is not None:
+        where.append(f"pc.spectral_class = '{_enum(spectral_class, 'spectral_class', _SPECTRAL_CLASSES)}'")
+    if discovery_method is not None:
+        where.append(f"p.discoverymethod = '{_enum(discovery_method, 'discovery_method', _DISCOVERY_METHODS)}'")
+    if disc_year_min is not None:
+        where.append(f"p.disc_year >= {_number(disc_year_min, 'disc_year_min')}")
+    if disc_year_max is not None:
+        where.append(f"p.disc_year <= {_number(disc_year_max, 'disc_year_max')}")
+    if in_habitable_zone is True:
+        where.append("hz.in_hz_conservative = 1")
+    elif in_habitable_zone is False:
+        where.append("hz.in_hz_conservative = 0")
+    if rocky_only:
+        where.append("hz.is_rocky_candidate = 1")
+    if exclude_controversial:
+        where.append("p.pl_controv_flag != 1")
+    return where
+
+
+# General-purpose search function (called by tools)
+def search_planets(
+        radius_min=None, radius_max=None,
+        mass_min=None, mass_max=None,
+        period_min=None, period_max=None,
+        distance_max_pc=None,
+        size_class=None,
+        orbital_class=None,
+        spectral_class=None,
+        discovery_method=None,
+        disc_year_min=None, disc_year_max=None,
+        in_habitable_zone=None,
+        rocky_only=False,
+        exclude_controversial=True,
+        sort_by="distance_pc", sort_desc=False, limit=20
+):
+    try:
+        where = _build_where(
+            radius_min=radius_min, radius_max=radius_max,
+            mass_min=mass_min, mass_max=mass_max,
+            period_min=period_min, period_max=period_max,
+            distance_max_pc=distance_max_pc,
+            size_class=size_class,
+            orbital_class=orbital_class,
+            spectral_class=spectral_class,
+            discovery_method=discovery_method,
+            disc_year_min=disc_year_min, disc_year_max=disc_year_max,
+            in_habitable_zone=in_habitable_zone,
+            rocky_only=rocky_only,
+            exclude_controversial=exclude_controversial,
+        )
+        if sort_by not in _SORT_COLUMNS:
+            raise FilterError(f"Invalid sort_by: '{sort_by}'. Must be one of: {', '.join(_SORT_COLUMNS.keys())}")
+        limit = int(_number(limit, 'limit'))
+    except FilterError as e:
+        return {"status": "filter_error", "error": str(e), "notes": []}
+
+    query_str = f"""
+        SELECT
+            p.pl_name               AS pl_name,
+            p.hostname              AS hostname,
+            p.pl_rade               AS radius_earth,
+            p.pl_bmasse             AS mass_earth,
+            p.pl_orbper             AS orbital_period_days,
+            p.sy_dist               AS distance_pc,
+            p.disc_year             AS discovery_year,
+            pc.size_class           AS size_class,
+            pc.orbital_class        AS orbital_class,
+            pc.spectral_class       AS spectral_class,
+            hz.in_hz_conservative   AS in_hz_conservative
+        FROM planets p
+        LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
+        LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
+        WHERE {" AND ".join(where) if where else "1 = 1"}
+        ORDER BY {_SORT_COLUMNS[sort_by]} {"DESC" if sort_desc else "ASC"} NULLS LAST
+        LIMIT {limit + 1}
+    """
+    result = query(query_str, limit=limit)
+    notes = []
+
+    if in_habitable_zone is True:
+        notes.append(
+            "Filtering by habitable zone membership is based on the conservative "
+            "model. The optimistic model is not used here."
+        )
+    elif in_habitable_zone is False:
+        notes.append(
+            "Only planets that were evaluated and found outside the conservative "
+            "habitable zone are included. Planets whose habitable zone could not be "
+            "computed (host star outside the model's range, or missing luminosity or "
+            "orbit) are excluded rather than counted as non-habitable."
+        )
+    if result["truncated"]:
+        notes.append(
+            f"Results truncated to {limit} rows. Refine your filters to see more."
+        )
+
+    return {
+        "status": "ok",
+        "rows": result["rows"],
+        "row_count": result["row_count"],
+        "truncated": result["truncated"],
+        "notes": notes,
+    }
+
+
+# Aggregate function (called by tools)
+def count_planets(
+        group_by=None,
+        radius_min=None, radius_max=None,
+        mass_min=None, mass_max=None,
+        period_min=None, period_max=None,
+        distance_max_pc=None,
+        size_class=None,
+        orbital_class=None,
+        spectral_class=None,
+        discovery_method=None,
+        disc_year_min=None, disc_year_max=None,
+        in_habitable_zone=None,
+        rocky_only=False,
+        exclude_controversial=True,
+        limit=50
+):
+    try:
+        where = _build_where(
+            radius_min=radius_min, radius_max=radius_max,
+            mass_min=mass_min, mass_max=mass_max,
+            period_min=period_min, period_max=period_max,
+            distance_max_pc=distance_max_pc,
+            size_class=size_class,
+            orbital_class=orbital_class,
+            spectral_class=spectral_class,
+            discovery_method=discovery_method,
+            disc_year_min=disc_year_min, disc_year_max=disc_year_max,
+            in_habitable_zone=in_habitable_zone,
+            rocky_only=rocky_only,
+            exclude_controversial=exclude_controversial,
+        )
+        if group_by is not None and group_by not in _GROUP_COLUMNS:
+            raise FilterError(f"Invalid group_by: '{group_by}'. Must be one of: {', '.join(_GROUP_COLUMNS.keys())}")
+        limit = int(_number(limit, 'limit'))
+    except FilterError as e:
+        return {"status": "filter_error", "error": str(e), "notes": []}
+
+    select = "COUNT(*) AS count" if group_by is None else f"{_GROUP_COLUMNS[group_by]} AS group_value, COUNT(*) AS count"
+    tail = "" if group_by is None else f"GROUP BY 1 ORDER BY count DESC LIMIT {limit + 1}"
+
+    query_str = f"""
+        SELECT {select}
+        FROM planets p
+        LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
+        LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
+        WHERE {" AND ".join(where) if where else "1 = 1"}
+        {tail}
+    """
+    result = query(query_str, limit=limit)
+    rows = result["rows"]
+    notes = []
+
+    # A NULL group is an absence of data, not a category -- name it so.
+    if group_by is not None and any(row["group_value"] is None for row in rows):
+        for row in rows:
+            if row["group_value"] is None:
+                row["group_value"] = "unknown"
+        notes.append("The 'unknown' group holds planets with no value for this column, "
+                     "not planets belonging to a shared category.")
+    if group_by == "in_habitable_zone":
+        notes.append("Groups are the conservative habitable zone: 1 = inside, 0 = evaluated "
+                     "and outside, 'unknown' = never evaluated (host star outside the model's "
+                     "range, or missing luminosity or orbit). 'unknown' does not mean 'no'.")
+    if result["truncated"]:
+        notes.append(f"Results truncated to {limit} groups. Narrow the filters to see more.")
+
+    return {
+        "status": "ok",
+        "group_by": group_by,
+        "rows": rows,
+        "row_count": result["row_count"],
+        "truncated": result["truncated"],
+        "notes": notes,
+    }
+
+
+# Dictionary defining which functions are available to the tool
 TOOL_FUNCTIONS = {
-    "get_habitable_planets": get_habitable_planets,
+    "get_planet": get_planet,
+    "get_system": get_system,
+    "search_planets": search_planets,
+    "count_planets": count_planets
 }
