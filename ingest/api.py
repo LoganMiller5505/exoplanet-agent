@@ -1,10 +1,17 @@
+import os
+
 import requests
-import sqlite3
 import xml.etree.ElementTree as ET
 import json
 
+import psycopg
+from dotenv import load_dotenv
+
+load_dotenv()
+conn_string = os.getenv("DATABASE_URL")
+
 TABLES_XML_PATH = "ingest/tables.xml"
-XML_TYPE_MATCH = {"char": "TEXT", "double": "REAL", "int": "INTEGER"}
+XML_TYPE_MATCH = {"char": "TEXT", "double": "DOUBLE PRECISION", "int": "BIGINT"}
 
 ps_return_columns = """
     pl_name,hostname,pl_letter,default_flag,soltype,
@@ -120,18 +127,31 @@ def get_exoplanet_data(table_name, return_columns):
     except json.JSONDecodeError as e:
         print(f"Error: Failed to decode JSON when fetching data from {table_name}.\n{e}")
         return
-    conn = sqlite3.connect("data/exoplanets.db")
+
     column_types = get_column_types(table_name, return_columns)
     definitions = ", ".join(f"{column} {column_type}" for column, column_type in column_types.items())
-    with conn:
-        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-        conn.execute(f"CREATE TABLE {table_name} ({definitions})")
-        placeholders = ", ".join("?" for column in column_types)
-        conn.executemany(f"INSERT INTO {table_name} ({', '.join(column_types)}) VALUES ({placeholders})", [tuple(item[column] for column in column_types) for item in json_data])
-    conn.commit()
-    conn.close()
-    print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
-        
+
+    # table_name is the archive's own name and stays in the TAP query above; locally the
+    # raw tables are prefixed src_ to separate them from the stg_ views built on top.
+    dest_table = f"src_{table_name}"
+
+    try:
+        with psycopg.connect(conn_string) as conn:
+            print("Connection established.")
+
+            with conn.cursor() as cur:
+                cur.execute(f"DROP TABLE IF EXISTS {dest_table}")
+                cur.execute(f"CREATE TABLE IF NOT EXISTS {dest_table} ({definitions})")
+                placeholders = ", ".join("%s" for _ in column_types)
+                insert_query = f"INSERT INTO {dest_table} ({', '.join(column_types)}) VALUES ({placeholders})"
+                data_to_insert = [tuple(item[column] for column in column_types) for item in json_data]
+                cur.executemany(insert_query, data_to_insert)
+            print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
+
+    except Exception as e:
+        print("Connection failed.")
+        print(e)
+
 def main():
     get_exoplanet_data("ps", ps_return_columns)
     get_exoplanet_data("toi", toi_return_columns)

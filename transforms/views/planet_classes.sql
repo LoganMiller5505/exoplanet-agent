@@ -1,4 +1,4 @@
-DROP VIEW IF EXISTS planet_classes;
+DROP VIEW IF EXISTS planet_classes CASCADE;
 
 CREATE VIEW planet_classes AS
 SELECT

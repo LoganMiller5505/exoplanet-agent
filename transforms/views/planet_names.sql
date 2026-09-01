@@ -1,4 +1,4 @@
-DROP VIEW IF EXISTS planet_names;
+DROP VIEW IF EXISTS planet_names CASCADE;
 
 CREATE VIEW planet_names AS
 SELECT
@@ -28,7 +28,7 @@ SELECT
     'planet'        AS resolves_to,
     pl_name         AS pl_name,
     hostname        AS hostname
-FROM ps_default
+FROM stg_ps
 WHERE pl_name IS NOT NULL
 
 UNION
@@ -59,7 +59,7 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     hostname        AS hostname
-FROM ps_default
+FROM stg_ps
 WHERE hostname IS NOT NULL
 
 UNION
@@ -90,7 +90,7 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     hostname        AS hostname
-FROM ps_default
+FROM stg_ps
 WHERE hd_name IS NOT NULL
 
 UNION
@@ -121,7 +121,7 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     hostname        AS hostname
-FROM ps_default
+FROM stg_ps
 WHERE hip_name IS NOT NULL
 
 UNION
@@ -152,7 +152,7 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     hostname        AS hostname
-FROM ps_default
+FROM stg_ps
 WHERE tic_id IS NOT NULL
 
 UNION
@@ -183,7 +183,7 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     hostname        AS hostname
-FROM ps_default
+FROM stg_ps
 WHERE gaia_dr3_id IS NOT NULL
 
 UNION
@@ -214,8 +214,8 @@ SELECT
     'planet'        AS resolves_to,
     kn.pl_name      AS pl_name,
     psd.hostname    AS hostname
-FROM keplernames AS kn
-LEFT JOIN ps_default AS psd ON kn.pl_name = psd.pl_name
+FROM src_keplernames AS kn
+LEFT JOIN stg_ps AS psd ON kn.pl_name = psd.pl_name
 WHERE kepler_name IS NOT NULL
 
 UNION
@@ -246,8 +246,8 @@ SELECT
     'planet'        AS resolves_to,
     kn.pl_name         AS pl_name,
     psd.hostname            AS hostname
-FROM keplernames AS kn
-LEFT JOIN ps_default AS psd ON kn.pl_name = psd.pl_name
+FROM src_keplernames AS kn
+LEFT JOIN stg_ps AS psd ON kn.pl_name = psd.pl_name
 WHERE koi_name IS NOT NULL
 
 UNION
@@ -278,8 +278,8 @@ SELECT
     'planet'        AS resolves_to,
     k2n.pl_name         AS pl_name,
     psd.hostname            AS hostname
-FROM k2names AS k2n
-LEFT JOIN ps_default AS psd ON k2n.pl_name = psd.pl_name
+FROM src_k2names AS k2n
+LEFT JOIN stg_ps AS psd ON k2n.pl_name = psd.pl_name
 WHERE k2_name IS NOT NULL
 
 UNION
@@ -310,8 +310,8 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     psd.hostname    AS hostname
-FROM k2names AS k2n
-LEFT JOIN ps_default AS psd ON k2n.pl_name = psd.pl_name
+FROM src_k2names AS k2n
+LEFT JOIN stg_ps AS psd ON k2n.pl_name = psd.pl_name
 WHERE k2n.epic_id IS NOT NULL
 
 UNION
@@ -342,7 +342,7 @@ SELECT
     'planet'        AS resolves_to,
     pl_name         AS pl_name,
     hostname        AS hostname
-FROM k2pandc_default
+FROM stg_k2pandc
 WHERE epic_candname IS NOT NULL
 
 UNION
@@ -373,5 +373,5 @@ SELECT
     'star'          AS resolves_to,
     null            AS pl_name,
     hostname        AS hostname
-FROM k2pandc_default
+FROM stg_k2pandc
 WHERE epic_hostname IS NOT NULL;

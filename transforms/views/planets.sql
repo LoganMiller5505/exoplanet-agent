@@ -1,4 +1,4 @@
-DROP VIEW IF EXISTS planets;
+DROP VIEW IF EXISTS planets CASCADE;
 
 CREATE VIEW planets AS
 SELECT
@@ -10,5 +10,5 @@ SELECT
     psc.pl_nobs_jwst_e,
     psc.pl_nobs_jwst_pc,
     psc.pl_nobs_jwst_di
-FROM ps_default AS psd
-LEFT JOIN pscomppars AS psc ON psd.pl_name = psc.pl_name;
+FROM stg_ps AS psd
+LEFT JOIN src_pscomppars AS psc ON psd.pl_name = psc.pl_name;

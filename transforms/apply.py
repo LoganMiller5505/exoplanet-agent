@@ -1,37 +1,19 @@
-import sqlite3
+import os
 
-conn = sqlite3.connect("data/exoplanets.db")
-cursor = conn.cursor()
+import psycopg
+from dotenv import load_dotenv
 
-with open("transforms/views/default.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
+load_dotenv()
+conn_string = os.getenv("DATABASE_URL")
 
-with open("transforms/views/planets.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
-
-with open("transforms/views/planet_names.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
-
-with open("transforms/views/candidates.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
-
-with open("transforms/views/habitable_zone.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
-
-with open("transforms/views/planet_classes.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
-
-with open("transforms/views/systems.sql", "r") as f:
-    sql = f.read()
-cursor.executescript(sql)
-
-conn.commit()
-conn.close()
-
-print("Views created successfully.")
+with psycopg.connect(conn_string) as conn:
+    print("Connected to the database successfully.")
+    with conn.cursor() as cur:
+        # Dependency order, not alphabetical: staging builds stg_ps and stg_k2pandc,
+        # which planets reads; habitable_zone, planet_classes and systems all read
+        # stg_planets, so planets must come before them.
+        for name in ["staging", "planets", "planet_names", "candidates",
+                     "habitable_zone", "planet_classes", "systems"]:
+            with open(f"transforms/views/{name}.sql", "r") as f:
+                cur.execute(f.read())
+            print(f"Applied {name}.sql successfully.")

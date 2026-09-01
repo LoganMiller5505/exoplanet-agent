@@ -9,7 +9,7 @@ def resolve_object(name):
             resolves_to,
             pl_name,
             hostname,
-            GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
+            STRING_AGG(DISTINCT alias_type, ',') AS matched_via,
             MIN(alias) AS matched_alias
         FROM planet_names
         WHERE alias_norm = '{norm_name}'
@@ -24,7 +24,7 @@ def resolve_object(name):
                 resolves_to,
                 pl_name,
                 hostname,
-                GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
+                STRING_AGG(DISTINCT alias_type, ',') AS matched_via,
                 MIN(alias) AS matched_alias
             FROM planet_names
             WHERE alias_norm LIKE '{norm_name}%'
