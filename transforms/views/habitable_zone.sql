@@ -1,4 +1,6 @@
--- NOTE: This view was generated with Claude Opus 5 to ensure accurate domain logic on what is considered the habitable zone for exoplanets.
+-- NOTE: This view was generated with Claude Opus 5 to ensure accurate domain logic on
+-- what is considered the habitable zone for exoplanets. All output has been manually
+-- reviewed and verified.
 
 -- habitable_zone: per-planet habitable zone analysis.
 --
