@@ -1,33 +1,33 @@
-DROP VIEW IF EXISTS candidates;
+DROP VIEW IF EXISTS candidates CASCADE;
 
 CREATE VIEW candidates AS
 SELECT
-    toi.tid                 AS object_id,
+    src_toi.tid::text           AS object_id, --Cast: the K2 branch below unions a text object_id
     'TESS'                  AS survey,
     CASE
-        WHEN toi.tfopwg_disp IN ('CP','KP')     THEN 'confirmed'
-        WHEN toi.tfopwg_disp IN ('PC','APC')    THEN 'candidate'
-        WHEN toi.tfopwg_disp IN ('FP','FA')     THEN 'false_positive'
+        WHEN src_toi.tfopwg_disp IN ('CP','KP')     THEN 'confirmed'
+        WHEN src_toi.tfopwg_disp IN ('PC','APC')    THEN 'candidate'
+        WHEN src_toi.tfopwg_disp IN ('FP','FA')     THEN 'false_positive'
         ELSE 'unknown'
     END                     AS status,
-    toi.tfopwg_disp         AS status_raw,
+    src_toi.tfopwg_disp         AS status_raw,
     psd.pl_name             AS pl_name,
-    toi.pl_orbper           AS period,
-    toi.pl_rade             AS radius,
-    toi.pl_eqt              AS equilibrium_temperature,
-    toi.pl_insol            AS insolation,
-    toi.pl_trandurh         AS duration,
-    toi.pl_trandep          AS depth,
-    toi.st_teff             AS stellar_temperature
-FROM toi
-LEFT JOIN ps_default as psd
-    ON psd.tid_ic = 'TIC ' || toi.tid
-    AND ABS(toi.pl_orbper - psd.pl_orbper) < 0.01 --Match on an individual planet level so stars with multiple planets don't get expanded
+    src_toi.pl_orbper           AS period,
+    src_toi.pl_rade             AS radius,
+    src_toi.pl_eqt              AS equilibrium_temperature,
+    src_toi.pl_insol            AS insolation,
+    src_toi.pl_trandurh         AS duration,
+    src_toi.pl_trandep          AS depth,
+    src_toi.st_teff             AS stellar_temperature
+FROM src_toi
+LEFT JOIN stg_ps as psd
+    ON psd.tic_id = 'TIC ' || src_toi.tid
+    AND ABS(src_toi.pl_orbper - psd.pl_orbper) < 0.01 --Match on an individual planet level so stars with multiple planets don't get expanded
 
 UNION ALL
 
 SELECT
-    kepid           AS object_id,
+    kepid::text     AS object_id,
     'Kepler'        AS survey,
     CASE
         WHEN koi_disposition IN ('CONFIRMED')       THEN 'confirmed'
@@ -44,7 +44,7 @@ SELECT
     koi_duration    AS duration,
     koi_depth       AS depth,
     koi_steff       AS stellar_temperature
-FROM cumulative
+FROM src_cumulative
 
 UNION ALL
 
@@ -66,4 +66,4 @@ SELECT
     pl_trandur                          AS duration, --Archive metadata labels this 'day', but the values are hours: 355 rows would otherwise transit for longer than their whole orbit
     (pl_trandep*10000)                  AS depth, --Source is percent; 1% = 10,000 ppm
     st_teff                             AS stellar_temperature
-FROM k2pandc_default;
+FROM stg_k2pandc;

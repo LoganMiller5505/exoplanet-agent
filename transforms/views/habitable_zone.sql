@@ -29,7 +29,7 @@
 -- boundaries are computable, with flags describing where it falls. Filter with
 -- `WHERE in_hz_conservative = 1` at the call site.
 
-DROP VIEW IF EXISTS habitable_zone;
+DROP VIEW IF EXISTS habitable_zone CASCADE;
 
 CREATE VIEW habitable_zone AS
 WITH resolved AS (

@@ -130,16 +130,20 @@ def get_exoplanet_data(table_name, return_columns):
 
     column_types = get_column_types(table_name, return_columns)
     definitions = ", ".join(f"{column} {column_type}" for column, column_type in column_types.items())
-    
+
+    # table_name is the archive's own name and stays in the TAP query above; locally the
+    # raw tables are prefixed src_ to separate them from the stg_ views built on top.
+    dest_table = f"src_{table_name}"
+
     try:
         with psycopg.connect(conn_string) as conn:
             print("Connection established.")
 
             with conn.cursor() as cur:
-                cur.execute(f"DROP TABLE IF EXISTS {table_name}")
-                cur.execute(f"CREATE TABLE IF NOT EXISTS {table_name} ({definitions})")
+                cur.execute(f"DROP TABLE IF EXISTS {dest_table}")
+                cur.execute(f"CREATE TABLE IF NOT EXISTS {dest_table} ({definitions})")
                 placeholders = ", ".join("%s" for _ in column_types)
-                insert_query = f"INSERT INTO {table_name} ({', '.join(column_types)}) VALUES ({placeholders})"
+                insert_query = f"INSERT INTO {dest_table} ({', '.join(column_types)}) VALUES ({placeholders})"
                 data_to_insert = [tuple(item[column] for column in column_types) for item in json_data]
                 cur.executemany(insert_query, data_to_insert)
             print(f"{table_name} fetched and stored in the database successfully. Total records: {len(json_data)}")
