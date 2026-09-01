@@ -1,0 +1,8 @@
+DROP VIEW IF EXISTS ps_default;
+DROP VIEW IF EXISTS k2pandc_default;
+
+CREATE VIEW ps_default AS
+SELECT * FROM ps WHERE default_flag = 1;
+
+CREATE VIEW k2pandc_default AS
+SELECT * FROM k2pandc WHERE default_flag = 1;
