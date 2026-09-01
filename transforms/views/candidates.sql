@@ -17,11 +17,7 @@ SELECT
     toi.pl_eqt              AS equilibrium_temperature,
     toi.pl_insol            AS insolation,
     toi.pl_trandurh         AS duration,
-<<<<<<< HEAD
-    (toi.pl_trandep*100000) AS depth,
-=======
     toi.pl_trandep          AS depth,
->>>>>>> origin/main
     toi.st_teff             AS stellar_temperature
 FROM toi
 LEFT JOIN ps_default as psd
