@@ -12,7 +12,7 @@ def resolve_object(name):
             GROUP_CONCAT(DISTINCT alias_type) AS matched_via,
             MIN(alias) AS matched_alias
         FROM planet_names
-        WHERE alias_norm LIKE '{norm_name}'
+        WHERE alias_norm = '{norm_name}'
         GROUP BY resolves_to, pl_name, hostname
     """
     result = query(query_str)
@@ -41,11 +41,19 @@ def resolve_object(name):
         matched_via = None
     else:
         status = "resolved" if len(rows) == 1 else "ambiguous"
-        resolves_to = rows[0]["resolves_to"]
-        pl_name = rows[0]["pl_name"]
-        hostname = rows[0]["hostname"]
         candidates = rows
-        matched_via = rows[0]["matched_via"]
+        # Only a single match names an object. Filling these from rows[0] when several
+        # matched would silently pick one -- "55 Cnc b" the planet over "55 Cnc B" the star.
+        if status == "resolved":
+            resolves_to = rows[0]["resolves_to"]
+            pl_name = rows[0]["pl_name"]
+            hostname = rows[0]["hostname"]
+            matched_via = rows[0]["matched_via"]
+        else:
+            resolves_to = None
+            pl_name = None
+            hostname = None
+            matched_via = None
 
     return {"status": status, "resolves_to": resolves_to, "pl_name": pl_name, "hostname": hostname, "candidates": candidates, "matched_via": matched_via}
 
@@ -91,6 +99,20 @@ _SORT_COLUMNS = {
     "orbital_period_days": "p.pl_orbper",
     "discovery_year": "p.disc_year",
     "hz_position": "hz.hz_position",
+}
+
+# group_by never reaches the query text -- it selects a column, it isn't one.
+# Discrete columns only. hz_position is a continuous float (5270 distinct values),
+# so grouping on it yields thousands of groups of one; it stays sort-only.
+_GROUP_COLUMNS = {
+    "size_class": "pc.size_class",
+    "mass_class": "pc.mass_class",
+    "orbital_class": "pc.orbital_class",
+    "spectral_class": "pc.spectral_class",
+    "discovery_method": "p.discoverymethod",
+    "discovery_year": "p.disc_year",
+    "in_habitable_zone": "hz.in_hz_conservative",
+    "hostname": "p.hostname",
 }
 
 # Single-return functions (called by tools)
@@ -287,6 +309,59 @@ def get_system(hostname):
     }
 
 
+# Shared filter builder -- raises FilterError; callers own the try/except.
+def _build_where(
+        radius_min=None, radius_max=None,
+        mass_min=None, mass_max=None,
+        period_min=None, period_max=None,
+        distance_max_pc=None,
+        size_class=None,
+        orbital_class=None,
+        spectral_class=None,
+        discovery_method=None,
+        disc_year_min=None, disc_year_max=None,
+        in_habitable_zone=None,
+        rocky_only=False,
+        exclude_controversial=True,
+):
+    where = []
+    if radius_min is not None:
+        where.append(f"p.pl_rade >= {_number(radius_min, 'radius_min')}")
+    if radius_max is not None:
+        where.append(f"p.pl_rade <= {_number(radius_max, 'radius_max')}")
+    if mass_min is not None:
+        where.append(f"p.pl_bmasse >= {_number(mass_min, 'mass_min')}")
+    if mass_max is not None:
+        where.append(f"p.pl_bmasse <= {_number(mass_max, 'mass_max')}")
+    if period_min is not None:
+        where.append(f"p.pl_orbper >= {_number(period_min, 'period_min')}")
+    if period_max is not None:
+        where.append(f"p.pl_orbper <= {_number(period_max, 'period_max')}")
+    if distance_max_pc is not None:
+        where.append(f"p.sy_dist <= {_number(distance_max_pc, 'distance_max_pc')}")
+    if size_class is not None:
+        where.append(f"pc.size_class = '{_enum(size_class, 'size_class', _SIZE_CLASSES)}'")
+    if orbital_class is not None:
+        where.append(f"pc.orbital_class = '{_enum(orbital_class, 'orbital_class', _ORBITAL_CLASSES)}'")
+    if spectral_class is not None:
+        where.append(f"pc.spectral_class = '{_enum(spectral_class, 'spectral_class', _SPECTRAL_CLASSES)}'")
+    if discovery_method is not None:
+        where.append(f"p.discoverymethod = '{_enum(discovery_method, 'discovery_method', _DISCOVERY_METHODS)}'")
+    if disc_year_min is not None:
+        where.append(f"p.disc_year >= {_number(disc_year_min, 'disc_year_min')}")
+    if disc_year_max is not None:
+        where.append(f"p.disc_year <= {_number(disc_year_max, 'disc_year_max')}")
+    if in_habitable_zone is True:
+        where.append("hz.in_hz_conservative = 1")
+    elif in_habitable_zone is False:
+        where.append("hz.in_hz_conservative = 0")
+    if rocky_only:
+        where.append("hz.is_rocky_candidate = 1")
+    if exclude_controversial:
+        where.append("p.pl_controv_flag != 1")
+    return where
+
+
 # General-purpose search function (called by tools)
 def search_planets(
         radius_min=None, radius_max=None,
@@ -301,44 +376,23 @@ def search_planets(
         in_habitable_zone=None,
         rocky_only=False,
         exclude_controversial=True,
-        sort_by="distance_pc", limit=20
+        sort_by="distance_pc", sort_desc=False, limit=20
 ):
-    where = []
     try:
-        if radius_min is not None:
-            where.append(f"p.pl_rade >= {_number(radius_min, 'radius_min')}")
-        if radius_max is not None:
-            where.append(f"p.pl_rade <= {_number(radius_max, 'radius_max')}")
-        if mass_min is not None:
-            where.append(f"p.pl_bmasse >= {_number(mass_min, 'mass_min')}")
-        if mass_max is not None:
-            where.append(f"p.pl_bmasse <= {_number(mass_max, 'mass_max')}")
-        if period_min is not None:
-            where.append(f"p.pl_orbper >= {_number(period_min, 'period_min')}")
-        if period_max is not None:
-            where.append(f"p.pl_orbper <= {_number(period_max, 'period_max')}")
-        if distance_max_pc is not None:
-            where.append(f"p.sy_dist <= {_number(distance_max_pc, 'distance_max_pc')}")
-        if size_class is not None:
-            where.append(f"pc.size_class = '{_enum(size_class, 'size_class', _SIZE_CLASSES)}'")
-        if orbital_class is not None:
-            where.append(f"pc.orbital_class = '{_enum(orbital_class, 'orbital_class', _ORBITAL_CLASSES)}'")
-        if spectral_class is not None:
-            where.append(f"pc.spectral_class = '{_enum(spectral_class, 'spectral_class', _SPECTRAL_CLASSES)}'")
-        if discovery_method is not None:
-            where.append(f"p.discoverymethod = '{_enum(discovery_method, 'discovery_method', _DISCOVERY_METHODS)}'")
-        if disc_year_min is not None:
-            where.append(f"p.disc_year >= {_number(disc_year_min, 'disc_year_min')}")
-        if disc_year_max is not None:
-            where.append(f"p.disc_year <= {_number(disc_year_max, 'disc_year_max')}")
-        if in_habitable_zone is True:
-            where.append("hz.in_hz_conservative = 1")
-        elif in_habitable_zone is False:
-            where.append("hz.in_hz_conservative = 0")
-        if rocky_only:
-            where.append("hz.is_rocky_candidate = 1")
-        if exclude_controversial:
-            where.append("p.pl_controv_flag != 1")
+        where = _build_where(
+            radius_min=radius_min, radius_max=radius_max,
+            mass_min=mass_min, mass_max=mass_max,
+            period_min=period_min, period_max=period_max,
+            distance_max_pc=distance_max_pc,
+            size_class=size_class,
+            orbital_class=orbital_class,
+            spectral_class=spectral_class,
+            discovery_method=discovery_method,
+            disc_year_min=disc_year_min, disc_year_max=disc_year_max,
+            in_habitable_zone=in_habitable_zone,
+            rocky_only=rocky_only,
+            exclude_controversial=exclude_controversial,
+        )
         if sort_by not in _SORT_COLUMNS:
             raise FilterError(f"Invalid sort_by: '{sort_by}'. Must be one of: {', '.join(_SORT_COLUMNS.keys())}")
         limit = int(_number(limit, 'limit'))
@@ -362,7 +416,7 @@ def search_planets(
         LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
         LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
         WHERE {" AND ".join(where) if where else "1 = 1"}
-        ORDER BY {_SORT_COLUMNS[sort_by]} NULLS LAST
+        ORDER BY {_SORT_COLUMNS[sort_by]} {"DESC" if sort_desc else "ASC"} NULLS LAST
         LIMIT {limit + 1}
     """
     result = query(query_str, limit=limit)
@@ -395,15 +449,80 @@ def search_planets(
 
 
 # Aggregate function (called by tools)
-def count_planets(group_by, filters):
-    # TODO: Implement a function to count planets based on groupings and filters
-    return None
+def count_planets(
+        group_by=None,
+        radius_min=None, radius_max=None,
+        mass_min=None, mass_max=None,
+        period_min=None, period_max=None,
+        distance_max_pc=None,
+        size_class=None,
+        orbital_class=None,
+        spectral_class=None,
+        discovery_method=None,
+        disc_year_min=None, disc_year_max=None,
+        in_habitable_zone=None,
+        rocky_only=False,
+        exclude_controversial=True,
+        limit=50
+):
+    try:
+        where = _build_where(
+            radius_min=radius_min, radius_max=radius_max,
+            mass_min=mass_min, mass_max=mass_max,
+            period_min=period_min, period_max=period_max,
+            distance_max_pc=distance_max_pc,
+            size_class=size_class,
+            orbital_class=orbital_class,
+            spectral_class=spectral_class,
+            discovery_method=discovery_method,
+            disc_year_min=disc_year_min, disc_year_max=disc_year_max,
+            in_habitable_zone=in_habitable_zone,
+            rocky_only=rocky_only,
+            exclude_controversial=exclude_controversial,
+        )
+        if group_by is not None and group_by not in _GROUP_COLUMNS:
+            raise FilterError(f"Invalid group_by: '{group_by}'. Must be one of: {', '.join(_GROUP_COLUMNS.keys())}")
+        limit = int(_number(limit, 'limit'))
+    except FilterError as e:
+        return {"status": "filter_error", "error": str(e), "notes": []}
 
+    select = "COUNT(*) AS count" if group_by is None else f"{_GROUP_COLUMNS[group_by]} AS group_value, COUNT(*) AS count"
+    tail = "" if group_by is None else f"GROUP BY 1 ORDER BY count DESC LIMIT {limit + 1}"
 
-# "Meta" function (called by tools, if necessary)
-def describe_schema(view=None):
-    # TODO: Implement a function to describe the schema of the database
-    return None
+    query_str = f"""
+        SELECT {select}
+        FROM planets p
+        LEFT JOIN planet_classes pc ON p.pl_name = pc.pl_name
+        LEFT JOIN habitable_zone hz ON p.pl_name = hz.pl_name
+        WHERE {" AND ".join(where) if where else "1 = 1"}
+        {tail}
+    """
+    result = query(query_str, limit=limit)
+    rows = result["rows"]
+    notes = []
+
+    # A NULL group is an absence of data, not a category -- name it so.
+    if group_by is not None and any(row["group_value"] is None for row in rows):
+        for row in rows:
+            if row["group_value"] is None:
+                row["group_value"] = "unknown"
+        notes.append("The 'unknown' group holds planets with no value for this column, "
+                     "not planets belonging to a shared category.")
+    if group_by == "in_habitable_zone":
+        notes.append("Groups are the conservative habitable zone: 1 = inside, 0 = evaluated "
+                     "and outside, 'unknown' = never evaluated (host star outside the model's "
+                     "range, or missing luminosity or orbit). 'unknown' does not mean 'no'.")
+    if result["truncated"]:
+        notes.append(f"Results truncated to {limit} groups. Narrow the filters to see more.")
+
+    return {
+        "status": "ok",
+        "group_by": group_by,
+        "rows": rows,
+        "row_count": result["row_count"],
+        "truncated": result["truncated"],
+        "notes": notes,
+    }
 
 
 # Dictionary defining which functions are available to the tool
@@ -411,6 +530,5 @@ TOOL_FUNCTIONS = {
     "get_planet": get_planet,
     "get_system": get_system,
     "search_planets": search_planets,
-    "count_planets": count_planets,
-    "describe_schema": describe_schema,
+    "count_planets": count_planets
 }
